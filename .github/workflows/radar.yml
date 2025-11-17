@@ -1,8 +1,9 @@
-name: Early-Radar-Bot
+name: Early Radar Bot
 
 on:
   schedule:
-    - cron: "0 */4 * * *"   # Her 4 saatte bir
+    # Her gün saat 09:00 UTC → Türkiye saati ile 12:00
+    - cron: "0 9 * * *"
   workflow_dispatch:
 
 jobs:
@@ -10,19 +11,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Kodu çek
+      # Repo'yu çek
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Python kur
+      # Python kur
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - name: Kütüphaneler
-        run: pip install requests
+      # Bağımlılıkları kur
+      - name: Install requirements
+        run: |
+          pip install requests
 
-      - name: Botu çalıştır
+      # Ana bot dosyasını çalıştır
+      - name: Run Radar Bot
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python main.py
+        run: |
+          python main.py
