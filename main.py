@@ -15,16 +15,21 @@ DEFILLAMA_PROTOCOLS = "https://api.llama.fi/protocols"
 DEFILLAMA_ACTIVE_USERS = "https://api.llama.fi/activeUsers"
 DEFILLAMA_RAISES = "https://api.llama.fi/raises"
 
-MIN_QUALITY_SCORE = 80       # ✔ 80 altı proje gelmesin
-MIN_USER_SCORE = 80          # ✔ Usage sinyali de 80 altı gelmesin
-NEW_PROJECT_DAYS = 14
-USER_RECENT_DAYS = 30
-MAX_SIGNALS_PER_RUN = 3      # ✔ günde max 3 güçlü sinyal yeter
+MIN_QUALITY_SCORE = 80       # 80 altı proje gelmesin
+MIN_USER_SCORE = 80          
+NEW_PROJECT_DAYS = 14        # QUALITY = Son 14 gün
+USER_RECENT_DAYS = 30        # HYPE = Son 30 gün
+MAX_SIGNALS_PER_RUN = 3
 
 SENT_FILE = "sent.json"
 
+TOP_VC = [
+    "binance labs","a16z","jump","coinbase","okx","okx ventures",
+    "paradigm","polychain","dragonfly","framework","hashkey","multicoin"
+]
+
 # =====================================
-# SENT.JSON YÖNETİMİ (Tekrar Etmesin)
+# SENT.JSON (Tekrar göndermeyi engelle)
 # =====================================
 
 def load_sent():
@@ -68,7 +73,7 @@ def telegram(msg):
         pass
 
 # =====================================
-# TOKEN FİLTRESİ – Tokeni olanı sil
+# TOKEN FİLTRESİ
 # =====================================
 
 def has_token(proto):
@@ -80,7 +85,8 @@ def has_token(proto):
 # =====================================
 
 def detect_category(proto):
-    txt = ((proto.get("category") or "") + " " + (proto.get("name") or "")).lower()
+    txt = ((proto.get("category") or "") + " " +
+           (proto.get("name") or "")).lower()
 
     if any(x in txt for x in ["layer1","layer 1","l1","layer2","l2","rollup","zk"]):
         return "L1/L2"
@@ -94,6 +100,7 @@ def detect_category(proto):
         return "AI/Infra"
     return "General"
 
+
 # =====================================
 # SKORLAR
 # =====================================
@@ -106,21 +113,18 @@ def score_quality(p):
 
     if category in ["L1/L2","Perp/DEX","DEX","DeFi","AI/Infra"]:
         score += 30
-    if tvl >= 50_000_000:
-        score += 30
-    elif tvl >= 10_000_000:
-        score += 20
-    elif tvl >= 1_000_000:
-        score += 10
+
+    if tvl >= 50_000_000: score += 30
+    elif tvl >= 10_000_000: score += 20
+    elif tvl >= 1_000_000: score += 10
 
     if listed:
         age = (time.time() - listed) / 86400
-        if age <= 14:
-            score += 30
-        elif age <= 30:
-            score += 10
+        if age <= NEW_PROJECT_DAYS: score += 30
+        elif age <= 30: score += 10
 
     return score
+
 
 def score_user(p, u):
     if not u:
@@ -144,8 +148,68 @@ def score_user(p, u):
 
     return score
 
+
 # =====================================
-# MESAJ ŞABLONLARI
+# VC RADAR (ListedAt filtresi yok)
+# =====================================
+
+def vc_radar(proto_index):
+    data = jget(DEFILLAMA_RAISES)
+    if not data:
+        return []
+
+    raises = data.get("raises", [])
+    vc_list = []
+
+    for r in raises:
+        name = (r.get("project") or "")
+        slug = name.lower()
+
+        # Protokol varsa token kontrolü yap
+        proto = proto_index.get(slug)
+        if proto and has_token(proto):
+            continue
+
+        # Top-tier VC kontrolü
+        investors = " ".join(
+            i.get("name", "").lower()
+            for i in r.get("investors", [])
+        )
+
+        if not any(vc in investors for vc in TOP_VC):
+            continue
+
+        vc_list.append(r)
+
+    return vc_list[:3]
+
+
+def format_vc_signal(r):
+    name = r.get("project", "?")
+    amount = r.get("amount", 0)
+    date = r.get("date", 0)
+
+    try:
+        dt = datetime.utcfromtimestamp(date).strftime("%Y-%m-%d")
+    except:
+        dt = "?"
+
+    investors = ", ".join(
+        i.get("name", "?") for i in r.get("investors", [])
+    )
+
+    return (
+        f"💰 [VC SIGNAL – TOP VC]\n\n"
+        f"📛 Proje: {name}\n"
+        f"🏦 Yatırımcılar: {investors}\n"
+        f"💰 Raise: ${amount:,.0f}\n"
+        f"📆 Tarih: {dt}\n\n"
+        f"⏱ {now_utc()}"
+    )
+
+
+# =====================================
+# MESAJ
 # =====================================
 
 def msg(proto, score):
@@ -162,6 +226,7 @@ def msg(proto, score):
         f"⏱ {now_utc()}"
     )
 
+
 # =====================================
 # RADAR
 # =====================================
@@ -176,76 +241,103 @@ def run():
         print("Protokoller alınamadı.")
         return
 
+    # Protokol index
+    proto_index = {}
+    for p in protocols:
+        slug = (p.get("slug") or p.get("name") or "").lower()
+        proto_index[slug] = p
+
     active_users = jget(DEFILLAMA_ACTIVE_USERS) or {}
 
     quality_list = []
     hype_list = []
 
+    now_ts = time.time()
+
+    # QUALITY + HYPE
     for p in protocols:
         name = p.get("name")
         if not name:
             continue
 
-        # ✔ tekrar göndermeyi engelle
+        # Tekrar gönderme
         if name in sent:
             continue
 
-        # ✔ tokeni olanı sil
+        # Token varsa at
         if has_token(p):
             continue
 
-        # ✔ listedAt kontrolü
+        # Yeni proje (QUALITY için)
         listed = p.get("listedAt") or 0
         if not listed:
             continue
 
-        age = (time.time() - listed) / 86400
-        if age > NEW_PROJECT_DAYS:
-            continue
+        age = (now_ts - listed) / 86400
 
-        # Quality skor
-        q = score_quality(p)
-        if q >= MIN_QUALITY_SCORE:
-            quality_list.append((q, p))
+        # QUALITY radarı için 14 gün sınırı
+        if age <= NEW_PROJECT_DAYS:
+            q = score_quality(p)
+            if q >= MIN_QUALITY_SCORE:
+                quality_list.append((q, p))
 
-        # Hype skor
-        slug = (p.get("slug") or "").lower()
-        u = active_users.get(slug)
-        h = score_user(p, u)
-        if h >= MIN_USER_SCORE:
-            hype_list.append((h, p))
+        # HYPE radarı için 30 gün sınırı
+        if age <= USER_RECENT_DAYS:
+            slug = (p.get("slug") or "").lower()
+            u = active_users.get(slug)
+            h = score_user(p, u)
+            if h >= MIN_USER_SCORE:
+                hype_list.append((h, p))
 
-    # Sırala
+    # Skorlara göre sırala
     quality_list.sort(reverse=True)
     hype_list.sort(reverse=True)
 
-    sent_this_run = 0
+    sent_count = 0
 
-    # Önce quality gönder
-    for score, proto in quality_list:
-        if sent_this_run >= MAX_SIGNALS_PER_RUN:
-            break
-        name = proto.get("name")
-        telegram(msg(proto, score))
+    # VC RADARI (önce VC sinyali)
+    vc_results = vc_radar(proto_index)
+    for r in vc_results:
+        name = r.get("project")
+        if name in sent:
+            continue
+
+        telegram(format_vc_signal(r))
         sent.add(name)
         save_sent(sent)
-        sent_this_run += 1
+        sent_count += 1
         time.sleep(1)
 
-    # Sonra hype gönder (yer kaldıysa)
-    for score, proto in hype_list:
-        if sent_this_run >= MAX_SIGNALS_PER_RUN:
+        if sent_count >= MAX_SIGNALS_PER_RUN:
+            print("[*] Limit doldu.")
+            return
+
+    # QUALITY sinyalleri
+    for score, proto in quality_list:
+        if sent_count >= MAX_SIGNALS_PER_RUN:
             break
+
         name = proto.get("name")
         telegram(msg(proto, score))
         sent.add(name)
         save_sent(sent)
-        sent_this_run += 1
+        sent_count += 1
+        time.sleep(1)
+
+    # HYPE sinyalleri
+    for score, proto in hype_list:
+        if sent_count >= MAX_SIGNALS_PER_RUN:
+            break
+
+        name = proto.get("name")
+        telegram(msg(proto, score))
+        sent.add(name)
+        save_sent(sent)
+        sent_count += 1
         time.sleep(1)
 
     print("[*] Gönderim tamamlandı.")
 
 # =====================================
-
 if __name__ == "__main__":
     run()
