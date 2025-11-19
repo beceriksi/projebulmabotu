@@ -15,21 +15,22 @@ DEFILLAMA_PROTOCOLS = "https://api.llama.fi/protocols"
 DEFILLAMA_ACTIVE_USERS = "https://api.llama.fi/activeUsers"
 DEFILLAMA_RAISES = "https://api.llama.fi/raises"
 
-MIN_QUALITY_SCORE = 80       # 80 altı proje gelmesin
-MIN_USER_SCORE = 80          
-NEW_PROJECT_DAYS = 14        # QUALITY = Son 14 gün
-USER_RECENT_DAYS = 30        # HYPE = Son 30 gün
+MIN_QUALITY_SCORE = 80
+MIN_USER_SCORE = 80
+NEW_PROJECT_DAYS = 14
+USER_RECENT_DAYS = 30
 MAX_SIGNALS_PER_RUN = 3
 
 SENT_FILE = "sent.json"
 
 TOP_VC = [
-    "binance labs","a16z","jump","coinbase","okx","okx ventures",
-    "paradigm","polychain","dragonfly","framework","hashkey","multicoin"
+    "binance labs","a16z","jump","coinbase ventures","coinbase",
+    "okx ventures","paradigm","polychain","dragonfly","framework",
+    "hashkey","multicoin"
 ]
 
 # =====================================
-# SENT.JSON (Tekrar göndermeyi engelle)
+# SENT.JSON
 # =====================================
 
 def load_sent():
@@ -52,7 +53,7 @@ def now_utc():
 
 def jget(url):
     try:
-        r = requests.get(url, timeout=15)
+        r = requests.get(url, timeout=20)
         if r.status_code == 200:
             return r.json()
     except:
@@ -61,19 +62,19 @@ def jget(url):
 
 def telegram(msg):
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("[NO TG] " + msg)
+        print("[NO TELEGRAM] " + msg)
         return
     try:
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             data={"chat_id": CHAT_ID, "text": msg},
-            timeout=10
+            timeout=15
         )
     except:
         pass
 
 # =====================================
-# TOKEN FİLTRESİ
+# TOKEN KONTROLÜ
 # =====================================
 
 def has_token(proto):
@@ -81,7 +82,7 @@ def has_token(proto):
     return bool(t and isinstance(t, str) and len(t) > 0)
 
 # =====================================
-# KATEGORİ
+# KATEGORİ ALGILAMA
 # =====================================
 
 def detect_category(proto):
@@ -99,7 +100,6 @@ def detect_category(proto):
     if "ai" in txt or "data" in txt or "oracle" in txt:
         return "AI/Infra"
     return "General"
-
 
 # =====================================
 # SKORLAR
@@ -125,7 +125,6 @@ def score_quality(p):
 
     return score
 
-
 def score_user(p, u):
     if not u:
         return 0
@@ -148,7 +147,6 @@ def score_user(p, u):
 
     return score
 
-
 # =====================================
 # VC RADAR (ListedAt filtresi yok)
 # =====================================
@@ -158,31 +156,23 @@ def vc_radar(proto_index):
     if not data:
         return []
 
-    raises = data.get("raises", [])
     vc_list = []
 
-    for r in raises:
+    for r in data.get("raises", []):
         name = (r.get("project") or "")
         slug = name.lower()
 
-        # Protokol varsa token kontrolü yap
         proto = proto_index.get(slug)
         if proto and has_token(proto):
             continue
 
-        # Top-tier VC kontrolü
-        investors = " ".join(
-            i.get("name", "").lower()
-            for i in r.get("investors", [])
-        )
-
+        investors = " ".join(i.get("name","").lower() for i in r.get("investors", []))
         if not any(vc in investors for vc in TOP_VC):
             continue
 
         vc_list.append(r)
 
     return vc_list[:3]
-
 
 def format_vc_signal(r):
     name = r.get("project", "?")
@@ -194,12 +184,10 @@ def format_vc_signal(r):
     except:
         dt = "?"
 
-    investors = ", ".join(
-        i.get("name", "?") for i in r.get("investors", [])
-    )
+    investors = ", ".join(i.get("name","?") for i in r.get("investors", []))
 
     return (
-        f"💰 [VC SIGNAL – TOP VC]\n\n"
+        f"💰 [VC SIGNAL – Top VC]\n\n"
         f"📛 Proje: {name}\n"
         f"🏦 Yatırımcılar: {investors}\n"
         f"💰 Raise: ${amount:,.0f}\n"
@@ -207,15 +195,14 @@ def format_vc_signal(r):
         f"⏱ {now_utc()}"
     )
 
-
 # =====================================
 # MESAJ
 # =====================================
 
 def msg(proto, score):
     name = proto.get("name")
-    category = detect_category(proto)
     tvl = proto.get("tvl") or 0
+    category = detect_category(proto)
 
     return (
         f"🔥 Yeni Sinyal (Skor: {score})\n\n"
@@ -226,9 +213,8 @@ def msg(proto, score):
         f"⏱ {now_utc()}"
     )
 
-
 # =====================================
-# RADAR
+# ANA RADAR
 # =====================================
 
 def run():
@@ -254,34 +240,31 @@ def run():
 
     now_ts = time.time()
 
-    # QUALITY + HYPE
+    # QUALITY ve HYPE
     for p in protocols:
         name = p.get("name")
         if not name:
             continue
 
-        # Tekrar gönderme
         if name in sent:
             continue
 
-        # Token varsa at
         if has_token(p):
             continue
 
-        # Yeni proje (QUALITY için)
         listed = p.get("listedAt") or 0
         if not listed:
             continue
 
         age = (now_ts - listed) / 86400
 
-        # QUALITY radarı için 14 gün sınırı
+        # QUALITY
         if age <= NEW_PROJECT_DAYS:
             q = score_quality(p)
             if q >= MIN_QUALITY_SCORE:
                 quality_list.append((q, p))
 
-        # HYPE radarı için 30 gün sınırı
+        # HYPE
         if age <= USER_RECENT_DAYS:
             slug = (p.get("slug") or "").lower()
             u = active_users.get(slug)
@@ -289,13 +272,16 @@ def run():
             if h >= MIN_USER_SCORE:
                 hype_list.append((h, p))
 
-    # Skorlara göre sırala
-    quality_list.sort(reverse=True)
-    hype_list.sort(reverse=True)
+    # Şimdi SIRALAMA HATASINI %100 ENGELLİYORUZ
+    quality_list = [(score, proto) for score, proto in quality_list if isinstance(score, (int,float))]
+    hype_list = [(score, proto) for score, proto in hype_list if isinstance(score, (int,float))]
+
+    quality_list.sort(key=lambda x: x[0], reverse=True)
+    hype_list.sort(key=lambda x: x[0], reverse=True)
 
     sent_count = 0
 
-    # VC RADARI (önce VC sinyali)
+    # VC RADAR
     vc_results = vc_radar(proto_index)
     for r in vc_results:
         name = r.get("project")
@@ -312,7 +298,7 @@ def run():
             print("[*] Limit doldu.")
             return
 
-    # QUALITY sinyalleri
+    # QUALITY RADAR
     for score, proto in quality_list:
         if sent_count >= MAX_SIGNALS_PER_RUN:
             break
@@ -324,7 +310,7 @@ def run():
         sent_count += 1
         time.sleep(1)
 
-    # HYPE sinyalleri
+    # HYPE RADAR
     for score, proto in hype_list:
         if sent_count >= MAX_SIGNALS_PER_RUN:
             break
